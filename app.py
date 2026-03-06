@@ -117,14 +117,22 @@ def cat_xaxis():
 
 
 def decreto_vline(fig):
-    """Agrega línea vertical del decreto en julio 2025."""
+    """Agrega línea vertical del decreto en julio 2025 (compatible con ejes categóricos)."""
     corte_label = mes_label(CORTE)
-    if corte_label in MESES_LABELS:
-        fig.add_vline(
-            x=corte_label, line_dash="dash", line_color=DECRETO, line_width=2,
-            annotation_text="Decreto 293", annotation_position="top left",
-            annotation_font_color=DECRETO, annotation_font_size=11,
-        )
+    fig.add_shape(
+        type="line",
+        x0=corte_label, x1=corte_label,
+        y0=0, y1=1,
+        yref="paper",
+        line=dict(color=DECRETO, width=2, dash="dash"),
+    )
+    fig.add_annotation(
+        x=corte_label, y=1, yref="paper",
+        text="Decreto 293",
+        showarrow=False,
+        font=dict(color=DECRETO, size=11),
+        yanchor="bottom",
+    )
 
 
 # ── Sidebar ────────────────────────────────────────────────────
