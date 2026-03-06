@@ -5,7 +5,6 @@ Secretaría Distrital de Salud de Bogotá
 """
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
 import json
 
@@ -32,12 +31,25 @@ PLOTLY_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(color="#E2E8F0", size=12),
-    margin=dict(l=60, r=30, t=60, b=60),
+    margin=dict(l=60, r=30, t=60, b=80),
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
 )
 
 FUENTE = "Fuente: SIVELCE | dic 2024 – feb 2026"
+
+# Etiquetas cortas para meses: "2024-12" → "dic-24"
+MES_CORTO = {
+    "01": "ene", "02": "feb", "03": "mar", "04": "abr",
+    "05": "may", "06": "jun", "07": "jul", "08": "ago",
+    "09": "sep", "10": "oct", "11": "nov", "12": "dic",
+}
+
+
+def mes_label(m):
+    """Convierte '2025-07' en 'jul-25'."""
+    parts = m.split("-")
+    return f"{MES_CORTO.get(parts[1], parts[1])}-{parts[0][2:]}"
 
 
 # ── Carga de datos ─────────────────────────────────────────────
@@ -50,11 +62,22 @@ def load_data():
 D = load_data()
 META = D["meta"]
 
+# Nombres de franjas con contexto
+FRANJA_DISPLAY = {
+    "F1": "🔴 Crítica (3-5 AM) — Ventana del decreto",
+    "F2": "Ampliada (2-5 AM)",
+    "F3": "Ampliada (3-6 AM)",
+    "F4": "Extendida (1-6 AM)",
+    "F5": "🔵 Nocturna (10 PM-6 AM) — Mayor poder",
+    "F6": "Madrugada (12-6 AM)",
+}
+
 FRANJA_MAP = {f["id"]: f["nombre"] for f in META["franjas"]}
 FRANJA_IDS = list(FRANJA_MAP.keys())
 TIP_MAP = {t["id"]: t["nombre"] for t in META["tipologias"]}
 TIP_IDS = list(TIP_MAP.keys())
 MESES = META["meses"]
+MESES_LABELS = [mes_label(m) for m in MESES]
 CORTE = META["corte"]
 TOTAL = META["total"]
 LOC_FOCAL = META["locFocal"]
@@ -82,21 +105,26 @@ def get_poder(fid, tid, diseno):
     return D["poder"].get(f"{fid}_{tid}_{diseno}", {})
 
 
+def cat_xaxis():
+    """Configuración común para ejes X categóricos con meses."""
+    return dict(
+        type="category",
+        categoryorder="array",
+        categoryarray=MESES_LABELS,
+        gridcolor="rgba(255,255,255,0.08)",
+        tickangle=-45,
+    )
+
+
 def decreto_vline(fig):
     """Agrega línea vertical del decreto en julio 2025."""
-    if CORTE in MESES:
-        idx = MESES.index(CORTE)
+    corte_label = mes_label(CORTE)
+    if corte_label in MESES_LABELS:
         fig.add_vline(
-            x=idx, line_dash="dash", line_color=DECRETO, line_width=2,
+            x=corte_label, line_dash="dash", line_color=DECRETO, line_width=2,
             annotation_text="Decreto 293", annotation_position="top left",
             annotation_font_color=DECRETO, annotation_font_size=11,
         )
-
-
-def fmt_delta(val):
-    if val > 0:
-        return f"+{val:.1f}%"
-    return f"{val:.1f}%"
 
 
 # ── Sidebar ────────────────────────────────────────────────────
@@ -108,8 +136,13 @@ with st.sidebar:
     st.markdown("**Franja horaria**")
     franja_sel = st.radio(
         "Franja", FRANJA_IDS,
-        format_func=lambda x: FRANJA_MAP[x],
+        format_func=lambda x: FRANJA_DISPLAY.get(x, FRANJA_MAP[x]),
         label_visibility="collapsed",
+    )
+    st.caption(
+        "La franja crítica (3-5 AM) es donde aplica la diferencia "
+        "regulatoria del decreto. Franjas más amplias tienen más eventos "
+        "y mayor poder estadístico para detectar cambios."
     )
 
     st.divider()
@@ -123,7 +156,7 @@ with st.sidebar:
     st.divider()
     st.caption(f"SIVELCE (depurado)  \ndic 2024 – feb 2026  \nN = {TOTAL:,}")
 
-franja_label = FRANJA_MAP[franja_sel]
+franja_label = FRANJA_DISPLAY.get(franja_sel, FRANJA_MAP[franja_sel])
 tip_label = TIP_MAP[tip_sel]
 
 # ── Título ─────────────────────────────────────────────────────
@@ -146,6 +179,12 @@ tabs = st.tabs([
 # TAB 1: GENERAL
 # ================================================================
 with tabs[0]:
+    st.info(
+        "📊 **Evolución mensual de eventos** en la franja y tipología seleccionadas. "
+        "La línea verde (focal) debería separarse de la gris (control) después del "
+        "decreto si hay efecto. Hover para ver alcohol."
+    )
+
     s = get_series(franja_sel, tip_sel)
     if not s:
         st.warning("Sin datos para esta combinación.")
@@ -167,17 +206,22 @@ with tabs[0]:
         c3.metric("Pre Control (7m)", f"{sum_prC:,}", f"{delta_C:+.1f}% prom/mes")
         c4.metric("Post Control (8m)", f"{sum_poC:,}")
 
+        st.caption(
+            f"Franja: {franja_label} | Tipología: {tip_label} | "
+            f"Focal = 9 localidades con zonas de rumba | Control = 5 localidades sin zonas"
+        )
+
         # Serie temporal
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=MESES, y=[r["F"] for r in s], name="Focal",
+            x=MESES_LABELS, y=[r["F"] for r in s], name="Focal",
             line=dict(color=FOCAL, width=2.5), mode="lines+markers",
             marker=dict(size=6),
             hovertemplate="Mes: %{x}<br>Focal: %{y}<br>Alcohol: %{customdata}<extra></extra>",
             customdata=[r["aF"] for r in s],
         ))
         fig.add_trace(go.Scatter(
-            x=MESES, y=[r["C"] for r in s], name="Control",
+            x=MESES_LABELS, y=[r["C"] for r in s], name="Control",
             line=dict(color=CONTROL, width=2.5), mode="lines+markers",
             marker=dict(size=6),
             hovertemplate="Mes: %{x}<br>Control: %{y}<br>Alcohol: %{customdata}<extra></extra>",
@@ -187,7 +231,7 @@ with tabs[0]:
             **PLOTLY_LAYOUT,
             title=f"Serie temporal — {franja_label} | {tip_label}",
             xaxis_title="Mes", yaxis_title="Eventos",
-            xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
         )
         decreto_vline(fig)
@@ -199,18 +243,18 @@ with tabs[0]:
 
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(
-            x=MESES, y=pct_alc_F, name="% Alcohol Focal",
+            x=MESES_LABELS, y=pct_alc_F, name="% Alcohol Focal",
             line=dict(color=FOCAL, width=2), mode="lines+markers", marker=dict(size=5),
         ))
         fig2.add_trace(go.Scatter(
-            x=MESES, y=pct_alc_C, name="% Alcohol Control",
+            x=MESES_LABELS, y=pct_alc_C, name="% Alcohol Control",
             line=dict(color=CONTROL, width=2), mode="lines+markers", marker=dict(size=5),
         ))
         fig2.update_layout(
             **PLOTLY_LAYOUT,
             title=f"% eventos con presencia de alcohol — {franja_label} | {tip_label}",
             xaxis_title="Mes", yaxis_title="% con alcohol",
-            xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
         )
         decreto_vline(fig2)
@@ -222,6 +266,12 @@ with tabs[0]:
 # TAB 2: LOCALIDADES
 # ================================================================
 with tabs[1]:
+    st.info(
+        "📍 **Explorador por localidad.** Selecciona una localidad para ver su serie "
+        "mensual. La línea horizontal gris marca la media pre-decreto. "
+        "Las barras doradas muestran eventos con alcohol."
+    )
+
     loc_options = [f"🟢 {l} (focal)" for l in LOC_FOCAL] + [f"⚪ {l} (control)" for l in LOC_CONTROL]
     loc_names = LOC_FOCAL + LOC_CONTROL
 
@@ -241,12 +291,12 @@ with tabs[1]:
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            x=MESES, y=als, name="Con alcohol",
+            x=MESES_LABELS, y=als, name="Con alcohol",
             marker_color=AMARILLO, opacity=0.5,
             hovertemplate="Mes: %{x}<br>Con alcohol: %{y}<extra></extra>",
         ))
         fig.add_trace(go.Scatter(
-            x=MESES, y=ns, name="Total eventos",
+            x=MESES_LABELS, y=ns, name="Total eventos",
             line=dict(color=ACCENT, width=3), mode="lines+markers",
             marker=dict(size=7),
             hovertemplate="Mes: %{x}<br>Total: %{y}<extra></extra>",
@@ -262,7 +312,7 @@ with tabs[1]:
             title=f"{sel_loc} — {franja_label} | Eventos mensuales",
             xaxis_title="Mes", yaxis_title="Eventos",
             barmode="overlay",
-            xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+            xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
         )
         decreto_vline(fig)
@@ -281,7 +331,8 @@ with tabs[1]:
                 else:
                     interp = "🔴 Alerta"
                 rows.append({
-                    "Mes": r["m"], "Conteo": obs,
+                    "Mes": mes_label(r["m"]),
+                    "Conteo": obs,
                     "Media pre": f"{media_pre:.1f}",
                     "Δ%": f"{delta:+.1f}%",
                     "Interpretación": interp,
@@ -295,6 +346,12 @@ with tabs[1]:
 # TAB 3: SEMÁFORO
 # ================================================================
 with tabs[2]:
+    st.info(
+        "🚦 **Sistema semáforo mensual.** Cada celda muestra el cambio % respecto "
+        "al promedio pre-decreto y el conteo absoluto. Rojo = alerta, "
+        "amarillo = precaución, verde = normal."
+    )
+
     st.markdown(f"#### 🚦 Semáforo — {franja_label}")
 
     sem_tip = st.radio(
@@ -308,9 +365,8 @@ with tabs[2]:
         st.warning("Sin datos de semáforo para esta combinación.")
     else:
         post_meses = sorted(set(r["m"] for r in sem_data))
+        post_meses_labels = [mes_label(m) for m in post_meses]
         locs = LOC_FOCAL
-
-        color_map_sem = {"R": ROJO, "A": AMARILLO, "V": VERDE, "G": "#475569"}
 
         z_colors = []
         z_text = []
@@ -326,12 +382,13 @@ with tabs[2]:
                     s_code = entry["s"]
                     row_colors.append({"R": 0, "A": 0.5, "V": 1, "G": 0.25}.get(s_code, 0.25))
                     row_text.append(f"{entry['d']:+.0f}%<br>({entry['c']})")
+                    estado = {"R": "ROJO", "A": "AMARILLO", "V": "VERDE"}.get(s_code, "GRIS")
                     row_hover.append(
-                        f"<b>{loc}</b> | {m}<br>"
+                        f"<b>{loc}</b> | {mes_label(m)}<br>"
                         f"Conteo: {entry['c']}<br>"
                         f"Baseline: {entry['b']}<br>"
                         f"Δ: {entry['d']:+.1f}%<br>"
-                        f"Estado: {'ROJO' if s_code == 'R' else 'AMARILLO' if s_code == 'A' else 'VERDE'}"
+                        f"Estado: {estado}"
                     )
                 else:
                     row_colors.append(0.25)
@@ -344,7 +401,7 @@ with tabs[2]:
         colorscale = [[0, ROJO], [0.25, "#475569"], [0.5, AMARILLO], [1, VERDE]]
 
         fig = go.Figure(data=go.Heatmap(
-            z=z_colors, x=post_meses, y=locs,
+            z=z_colors, x=post_meses_labels, y=locs,
             text=z_text, texttemplate="%{text}",
             textfont=dict(size=10),
             hovertext=hover_text, hoverinfo="text",
@@ -356,6 +413,7 @@ with tabs[2]:
             title=f"Semáforo — {franja_label} | {TIP_MAP[sem_tip]}",
             xaxis_title="Mes", yaxis_title="",
             height=450,
+            xaxis=dict(type="category", tickangle=-45),
             yaxis=dict(autorange="reversed"),
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -372,6 +430,12 @@ with tabs[2]:
 # TAB 4: DiD
 # ================================================================
 with tabs[3]:
+    st.info(
+        "📐 **Diferencias en Diferencias (DiD).** Compara el cambio pre→post entre "
+        "localidades focalizadas y control. Un DiD positivo indica que focal empeoró "
+        "más (o mejoró menos) que control. Se compara con el MDE para saber si es detectable."
+    )
+
     st.markdown(f"#### 📐 Diferencias en Diferencias — {franja_label}")
 
     rows_did = []
@@ -453,7 +517,7 @@ with tabs[3]:
             did_num = row["_did_num"]
             p_did = get_poder(franja_sel, tid, "did")
             mde = p_did.get("mde")
-            if mde is not None and tid != "T0_alc":
+            if mde is not None:
                 if abs(did_num) < mde:
                     st.info(
                         f"**{row['Tipología']}**: DiD observado = {did_num:+.1f}pp. "
@@ -474,36 +538,47 @@ with tabs[3]:
 # TAB 5: ALCOHOL POR HORA
 # ================================================================
 with tabs[4]:
+    st.info(
+        "🍺 **Proporción de eventos con alcohol por hora del día**, pre vs post decreto. "
+        "Las horas de la franja seleccionada se resaltan en dorado. "
+        "Hover para ver el N de cada barra."
+    )
+
     st.markdown(f"#### 🍺 Alcohol por hora — {franja_label}")
 
     alc_data = D["alcohol"]
     horas_franja = next((f["horas"] for f in META["franjas"] if f["id"] == franja_sel), [])
 
+    hora_labels = [f"{r['h']:02d}h" for r in alc_data]
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=[r["h"] for r in alc_data],
+        x=hora_labels,
         y=[r["prP"] for r in alc_data],
-        name=f"Pre-decreto",
+        name="Pre-decreto",
         marker_color=AZUL_PRE, opacity=0.8,
-        hovertemplate="Hora %{x}h<br>Pre: %{y:.1f}%<br>N=%{customdata}<extra></extra>",
+        hovertemplate="Hora %{x}<br>Pre: %{y:.1f}%<br>N=%{customdata:,}<extra></extra>",
         customdata=[r["prN"] for r in alc_data],
     ))
     fig.add_trace(go.Bar(
-        x=[r["h"] for r in alc_data],
+        x=hora_labels,
         y=[r["poP"] for r in alc_data],
-        name=f"Post-decreto",
+        name="Post-decreto",
         marker_color=ROJO_POST, opacity=0.8,
-        hovertemplate="Hora %{x}h<br>Post: %{y:.1f}%<br>N=%{customdata}<extra></extra>",
+        hovertemplate="Hora %{x}<br>Post: %{y:.1f}%<br>N=%{customdata:,}<extra></extra>",
         customdata=[r["poN"] for r in alc_data],
     ))
 
     # Resaltar franja seleccionada
     for h in horas_franja:
-        fig.add_vrect(
-            x0=h - 0.5, x1=h + 0.5,
-            fillcolor="gold", opacity=0.1,
-            line=dict(color="gold", width=1.5),
-        )
+        label = f"{h:02d}h"
+        idx = hora_labels.index(label) if label in hora_labels else -1
+        if idx >= 0:
+            fig.add_vrect(
+                x0=idx - 0.5, x1=idx + 0.5,
+                fillcolor="gold", opacity=0.12,
+                line=dict(color="gold", width=1.5),
+            )
 
     fig.update_layout(
         **PLOTLY_LAYOUT,
@@ -511,8 +586,12 @@ with tabs[4]:
         xaxis_title="Hora del evento",
         yaxis_title="% con alcohol",
         barmode="group",
+        bargap=0.15,
+        bargroupgap=0.05,
         xaxis=dict(
-            tickmode="linear", dtick=1,
+            type="category",
+            categoryorder="array",
+            categoryarray=hora_labels,
             gridcolor="rgba(255,255,255,0.08)",
         ),
         yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
@@ -548,6 +627,12 @@ with tabs[4]:
 # TAB 6: PODER ESTADÍSTICO
 # ================================================================
 with tabs[5]:
+    st.info(
+        "⚡ **Poder estadístico y MDE.** El Efecto Mínimo Detectable indica el cambio "
+        "más pequeño que podemos identificar con 80% de confianza. "
+        "Verde (<30%) = bueno, rojo (>50%) = solo detecta cambios muy grandes."
+    )
+
     st.markdown(f"#### ⚡ Poder Estadístico — {franja_label}")
 
     rows_poder = []
@@ -624,7 +709,7 @@ with tabs[5]:
             p = get_poder(fid, tip_sel, diseno)
             if p and p.get("mde"):
                 comp_rows.append({
-                    "Franja": FRANJA_MAP[fid],
+                    "Franja": FRANJA_DISPLAY.get(fid, FRANJA_MAP[fid]),
                     "Diseño": dis_label,
                     "MDE (%)": p["mde"],
                     "N pre": f"{p['nPr']:,}",
@@ -640,6 +725,11 @@ with tabs[5]:
 # TAB 7: RESUMEN EJECUTIVO
 # ================================================================
 with tabs[6]:
+    st.info(
+        "📋 **Resumen ejecutivo** con los hallazgos principales, limitaciones y "
+        "recomendaciones para la Secretaría."
+    )
+
     st.markdown("#### 📋 Resumen Ejecutivo")
 
     st.markdown("""
