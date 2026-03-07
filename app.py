@@ -153,6 +153,13 @@ def cat_xaxis():
         gridcolor="rgba(255,255,255,0.08)", tickangle=-45,
     )
 
+def make_layout(**overrides):
+    """Build layout dict merging PLOTLY_LAYOUT base with overrides (no conflicts)."""
+    layout = dict(PLOTLY_LAYOUT)
+    layout.update(overrides)
+    return layout
+
+
 def decreto_vline(fig):
     corte_label = mes_label(CORTE)
     fig.add_shape(
@@ -275,13 +282,12 @@ with tabs[0]:
             hovertemplate="Mes: %{x}<br>Control: %{y}<br>Alcohol: %{customdata}<extra></extra>",
             customdata=[r["aC"] for r in s],
         ))
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
+        fig.update_layout(**make_layout(
             title=f"Serie temporal — {franja_label} | {tip_label}",
             xaxis_title="Mes", yaxis_title="Eventos",
             xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-        )
+        ))
         decreto_vline(fig)
         st.plotly_chart(fig, use_container_width=True)
 
@@ -298,13 +304,12 @@ with tabs[0]:
             x=MESES_LABELS, y=pct_alc_C, name="% Alcohol Control",
             line=dict(color=CONTROL, width=2), mode="lines+markers", marker=dict(size=5),
         ))
-        fig2.update_layout(
-            **PLOTLY_LAYOUT,
+        fig2.update_layout(**make_layout(
             title=f"% eventos con presencia de alcohol — {franja_label} | {tip_label}",
             xaxis_title="Mes", yaxis_title="% con alcohol",
             xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-        )
+        ))
         decreto_vline(fig2)
         st.plotly_chart(fig2, use_container_width=True)
         st.caption(FOOTER)
@@ -459,14 +464,13 @@ with tabs[2]:
             annotation_position="top right",
             annotation_font_color="#94A3B8",
         )
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
+        fig.update_layout(**make_layout(
             title=f"{sel_loc} — {franja_label} | Eventos mensuales",
             xaxis_title="Mes", yaxis_title="Eventos",
             barmode="overlay",
             xaxis=cat_xaxis(),
             yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-        )
+        ))
         decreto_vline(fig)
         st.plotly_chart(fig, use_container_width=True)
 
@@ -562,14 +566,13 @@ with tabs[3]:
             colorscale=colorscale, showscale=False,
             xgap=2, ygap=2,
         ))
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
+        fig.update_layout(**make_layout(
             title=f"Semáforo — {franja_label} | {TIP_MAP[sem_tip]}",
             xaxis_title="Mes", yaxis_title="",
             height=470,
             xaxis=dict(type="category", tickangle=-45),
             yaxis=dict(autorange="reversed"),
-        )
+        ))
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(
@@ -732,8 +735,7 @@ with tabs[5]:
                 line=dict(color="gold", width=1.5),
             )
 
-    fig.update_layout(
-        **PLOTLY_LAYOUT,
+    fig.update_layout(**make_layout(
         title="Proporción de eventos con alcohol por hora del día",
         xaxis_title="Hora del evento",
         yaxis_title="% con alcohol",
@@ -745,7 +747,7 @@ with tabs[5]:
             gridcolor="rgba(255,255,255,0.08)",
         ),
         yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-    )
+    ))
     st.plotly_chart(fig, use_container_width=True)
 
     alc_franja = [r for r in alc_data if r["h"] in horas_franja]
@@ -841,14 +843,13 @@ with tabs[6]:
             fig.add_vline(x=30, line_dash="dot", line_color="#94A3B8",
                           annotation_text="Umbral deseable (30%)",
                           annotation_font_color="#94A3B8")
-            fig.update_layout(
-                **PLOTLY_LAYOUT,
+            fig.update_layout(**make_layout(
                 title=f"Efecto Mínimo Detectable — {franja_label}",
                 xaxis_title="MDE (%)", yaxis_title="",
                 height=max(450, len(plot_rows) * 45),
                 yaxis=dict(autorange="reversed"),
                 xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-            )
+            ))
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
