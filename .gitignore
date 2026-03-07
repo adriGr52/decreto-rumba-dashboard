@@ -1,0 +1,6 @@
+*.sbn
+*.sbx
+*.shp.xml
+__pycache__/
+*.pyc
+generar_datos.py

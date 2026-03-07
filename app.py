@@ -1,5 +1,5 @@
 """
-Decreto Rumba — Panel Analítico SIVELCE
+Acercamiento al Impacto — Decreto Rumba
 Dashboard interactivo para medición de impacto del Decreto 293/2025
 Secretaría Distrital de Salud de Bogotá
 """
@@ -7,16 +7,19 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import json
+import geopandas as gpd
+import folium
+from streamlit_folium import st_folium
 
 # ── Configuración ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="Decreto Rumba — Panel Analítico",
+    page_title="Acercamiento al Impacto — Decreto Rumba",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Colores
+# ── Colores ────────────────────────────────────────────────────
 FOCAL = "#16A34A"
 CONTROL = "#64748B"
 DECRETO = "#DC2626"
@@ -28,17 +31,18 @@ AZUL_PRE = "#3B82F6"
 ROJO_POST = "#EF4444"
 
 PLOTLY_LAYOUT = dict(
+    template="plotly_dark",
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="#E2E8F0", size=12),
+    font=dict(family="Arial", color="#E2E8F0", size=12),
     margin=dict(l=60, r=30, t=60, b=80),
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    height=470,
 )
 
-FUENTE = "Fuente: SIVELCE | dic 2024 – feb 2026"
+FOOTER = "Fuente: SIVELCE (dic 2024 – feb 2026) | SDS Bogotá | Marzo 2026"
 
-# Etiquetas cortas para meses: "2024-12" → "dic-24"
 MES_CORTO = {
     "01": "ene", "02": "feb", "03": "mar", "04": "abr",
     "05": "may", "06": "jun", "07": "jul", "08": "ago",
@@ -47,7 +51,6 @@ MES_CORTO = {
 
 
 def mes_label(m):
-    """Convierte '2025-07' en 'jul-25'."""
     parts = m.split("-")
     return f"{MES_CORTO.get(parts[1], parts[1])}-{parts[0][2:]}"
 
@@ -59,10 +62,46 @@ def load_data():
         return json.load(f)
 
 
+@st.cache_data
+def load_shapefile():
+    gdf = gpd.read_file("shapes/ZonaDecretoRumba.shp")
+    manual_match = {
+        'BOSA CENTRO': 'APROBADA', 'BOYACA SANTA MARIA': 'APROBADA',
+        '1 DE MAYO': 'NO_APROBADA', 'CUADRA PICHA': 'APROBADA',
+        'LA FAVORITA': 'APROBADA', 'RESTREPO': 'NO_APROBADA',
+        'LOMBARDIA': 'APROBADA', 'MARICHUELA': 'NO_APROBADA',
+        'CALLE 172A': 'APROBADA', 'ALAMOS': 'APROBADA',
+        'MODELIA': 'APROBADA', 'GALAN': 'APROBADA',
+        'FERIAS': 'APROBADA', 'ZONA ROSA': 'APROBADA',
+        'GALERIAS': 'NO_APROBADA', 'SUBAZAR': 'APROBADA',
+        'CHAPINERO': 'APROBADA', 'LOS PORTICOS': 'APROBADA',
+        'NORMANDIA': 'NO_APROBADA', 'CALLE 8 SUR': 'APROBADA',
+        'MARLY': 'APROBADA', 'CALLE 116': 'NO_APROBADA',
+        'CENTRO FONTIBON': 'APROBADA', 'SAN JOSE': 'NO_APROBADA',
+        'PALERMO': 'NO_APROBADA', 'SAN ANDRESITO': 'APROBADA',
+        'LAS FERIAS ZONA I': 'APROBADA',
+    }
+    zona_decreto_name = {
+        'BOSA CENTRO': 'Bosa Centro', 'BOYACA SANTA MARIA': 'Boyacá - Santa María',
+        'CUADRA PICHA': 'Cuadra Alegre', 'LA FAVORITA': 'La Favorita',
+        'LOMBARDIA': 'Lombardía', 'CALLE 172A': 'Calle 172A',
+        'ALAMOS': 'Álamos', 'MODELIA': 'Modelia', 'GALAN': 'El Galán',
+        'FERIAS': 'Las Ferias Zona 2', 'ZONA ROSA': 'Zona Rosa',
+        'SUBAZAR': 'Subazar', 'CHAPINERO': 'Chapinero Central',
+        'LOS PORTICOS': 'Los Pórticos', 'CALLE 8 SUR': 'Calle Octava Sur',
+        'MARLY': 'Marly', 'CENTRO FONTIBON': 'Centro Fontibón',
+        'SAN ANDRESITO': 'San Andresito San José',
+        'LAS FERIAS ZONA I': 'Las Ferias Zona 1',
+    }
+    gdf['ESTADO'] = gdf['NOMBRE_ZON'].map(manual_match).fillna('DESCONOCIDO')
+    gdf['ZONA_DECRETO'] = gdf['NOMBRE_ZON'].map(zona_decreto_name).fillna('')
+    gdf = gdf.to_crs(epsg=4326)
+    return gdf
+
+
 D = load_data()
 META = D["meta"]
 
-# Nombres de franjas con contexto
 FRANJA_DISPLAY = {
     "F1": "🔴 Crítica (3-5 AM) — Ventana del decreto",
     "F2": "Ampliada (2-5 AM)",
@@ -83,62 +122,53 @@ TOTAL = META["total"]
 LOC_FOCAL = META["locFocal"]
 LOC_CONTROL = META["locControl"]
 
+# Map zona localidad → clean loc name for semáforo linkage
+ZONA_LOC_MAP = {
+    'BOSA': 'Bosa', 'ENGATIVA': 'Engativa', 'KENNEDY': 'Kennedy',
+    'LOS MARTIRES': 'Martires', 'SUBA': 'Suba', 'USAQUEN': 'Usaquen',
+    'FONTIBON': 'Fontibon', 'PUENTE ARANDA': 'Puente Aranda',
+    'CHAPINERO': 'Chapinero',
+}
+
 
 # ── Helpers ────────────────────────────────────────────────────
 def get_series(fid, tid):
     return D["series"].get(f"{fid}_{tid}", [])
 
-
 def get_series_loc(fid, loc):
     return D["seriesLoc"].get(f"{fid}_{loc}", [])
-
 
 def get_did(fid, tid):
     return D["did"].get(f"{fid}_{tid}", {})
 
-
 def get_sem(fid, tid):
     return D["sem"].get(f"{fid}_{tid}", [])
-
 
 def get_poder(fid, tid, diseno):
     return D["poder"].get(f"{fid}_{tid}_{diseno}", {})
 
-
 def cat_xaxis():
-    """Configuración común para ejes X categóricos con meses."""
     return dict(
-        type="category",
-        categoryorder="array",
-        categoryarray=MESES_LABELS,
-        gridcolor="rgba(255,255,255,0.08)",
-        tickangle=-45,
+        type="category", categoryorder="array", categoryarray=MESES_LABELS,
+        gridcolor="rgba(255,255,255,0.08)", tickangle=-45,
     )
-
 
 def decreto_vline(fig):
-    """Agrega línea vertical del decreto en julio 2025 (compatible con ejes categóricos)."""
     corte_label = mes_label(CORTE)
     fig.add_shape(
-        type="line",
-        x0=corte_label, x1=corte_label,
-        y0=0, y1=1,
-        yref="paper",
-        line=dict(color=DECRETO, width=2, dash="dash"),
+        type="line", x0=corte_label, x1=corte_label, y0=0, y1=1,
+        yref="paper", line=dict(color=DECRETO, width=2, dash="dash"),
     )
     fig.add_annotation(
-        x=corte_label, y=1, yref="paper",
-        text="Decreto 293",
-        showarrow=False,
-        font=dict(color=DECRETO, size=11),
-        yanchor="bottom",
+        x=corte_label, y=1, yref="paper", text="Decreto 293",
+        showarrow=False, font=dict(color=DECRETO, size=11), yanchor="bottom",
     )
 
 
 # ── Sidebar ────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🏛️ DECRETO RUMBA")
-    st.caption("Medición de Impacto")
+    st.caption("Acercamiento al Impacto")
     st.divider()
 
     st.markdown("**Franja horaria**")
@@ -169,18 +199,17 @@ tip_label = TIP_MAP[tip_sel]
 
 # ── Título ─────────────────────────────────────────────────────
 st.markdown(
-    "<h2 style='margin-bottom:0'>Decreto Rumba — Panel Analítico SIVELCE</h2>"
+    "<h2 style='margin-bottom:0'>Acercamiento al Impacto — Decreto Rumba</h2>"
     "<p style='color:#94A3B8;margin-top:0'>"
-    f"Secretaría Distrital de Salud de Bogotá | {TOTAL:,} eventos | dic 2024 – feb 2026"
+    "Secretaría Distrital de Salud de Bogotá | Fuente: SIVELCE"
     "</p>",
     unsafe_allow_html=True,
 )
 
 # ── Tabs ───────────────────────────────────────────────────────
 tabs = st.tabs([
-    "📊 General", "📍 Localidades", "🚦 Semáforo",
-    "📐 Diferencias en Diferencias", "🍺 Alcohol por hora",
-    "⚡ Poder", "📋 Resumen",
+    "📊 General", "🗺️ Mapa", "📍 Localidades", "🚦 Semáforo",
+    "📐 DiD", "🍺 Alcohol", "⚡ Poder", "📖 Metodología",
 ])
 
 # ================================================================
@@ -205,19 +234,30 @@ with tabs[0]:
         sum_prC = sum(r["C"] for r in pre)
         sum_poC = sum(r["C"] for r in post)
 
-        delta_F = ((sum_poF / max(len(post), 1)) / (sum_prF / max(len(pre), 1)) - 1) * 100 if sum_prF > 0 else 0
-        delta_C = ((sum_poC / max(len(post), 1)) / (sum_prC / max(len(pre), 1)) - 1) * 100 if sum_prC > 0 else 0
+        n_pre_m = max(len(pre), 1)
+        n_post_m = max(len(post), 1)
+        avg_prF = sum_prF / n_pre_m
+        avg_poF = sum_poF / n_post_m
+        avg_prC = sum_prC / n_pre_m
+        avg_poC = sum_poC / n_post_m
+
+        delta_F = ((avg_poF / avg_prF) - 1) * 100 if avg_prF > 0 else 0
+        delta_C = ((avg_poC / avg_prC) - 1) * 100 if avg_prC > 0 else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Pre Focal (7m)", f"{sum_prF:,}", f"{delta_F:+.1f}% prom/mes")
+        c1.metric("Pre Focal (7m)", f"{sum_prF:,}", f"{delta_F:+.1f}% vs prom/mes pre")
         c2.metric("Post Focal (8m)", f"{sum_poF:,}")
-        c3.metric("Pre Control (7m)", f"{sum_prC:,}", f"{delta_C:+.1f}% prom/mes")
+        c3.metric("Pre Control (7m)", f"{sum_prC:,}", f"{delta_C:+.1f}% vs prom/mes pre")
         c4.metric("Post Control (8m)", f"{sum_poC:,}")
 
+        total_franja = sum_prF + sum_poF + sum_prC + sum_poC
         st.caption(
+            f"N eventos en franja seleccionada: {total_franja:,} | "
             f"Franja: {franja_label} | Tipología: {tip_label} | "
             f"Focal = 9 localidades con zonas de rumba | Control = 5 localidades sin zonas"
         )
+
+        st.divider()
 
         # Serie temporal
         fig = go.Figure()
@@ -267,13 +307,117 @@ with tabs[0]:
         )
         decreto_vline(fig2)
         st.plotly_chart(fig2, use_container_width=True)
-        st.caption(FUENTE)
+        st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 2: LOCALIDADES
+# TAB 2: MAPA
 # ================================================================
 with tabs[1]:
+    st.info(
+        "🗺️ **Mapa de las 27 zonas evaluadas.** Verde = aprobada (19 zonas en 9 localidades). "
+        "Gris = no aprobada (8 zonas). Click en una zona para ver sus datos."
+    )
+
+    st.markdown(f"#### 🗺️ 19 Zonas Focalizadas del Decreto 293/2025")
+
+    gdf = load_shapefile()
+
+    # Get semáforo for last month to color approved zones
+    sem_tip_map = "T1"  # Default to siniestros viales
+    sem_data = get_sem(franja_sel, sem_tip_map)
+    post_meses_all = sorted(set(r["m"] for r in sem_data)) if sem_data else []
+    last_month = post_meses_all[-1] if post_meses_all else None
+
+    loc_semaforo = {}
+    if last_month:
+        for entry in sem_data:
+            if entry["m"] == last_month:
+                loc_semaforo[entry["l"]] = entry["s"]
+
+    color_sem = {"R": "#DC2626", "A": "#D97706", "V": "#16A34A"}
+
+    # Build folium map
+    m = folium.Map(
+        location=[4.65, -74.1], zoom_start=11,
+        tiles="CartoDB dark_matter",
+    )
+
+    for _, row in gdf.iterrows():
+        is_approved = row['ESTADO'] == 'APROBADA'
+
+        if is_approved:
+            loc_raw = str(row['LocaNombre']).strip().upper()
+            loc_clean = ZONA_LOC_MAP.get(loc_raw, None)
+            sem_code = loc_semaforo.get(loc_clean, None) if loc_clean else None
+
+            if sem_code and sem_code in color_sem:
+                fill_color = color_sem[sem_code]
+                sem_label = {"R": "ROJO", "A": "AMARILLO", "V": "VERDE"}.get(sem_code, "—")
+            else:
+                fill_color = VERDE
+                sem_label = "—"
+        else:
+            fill_color = "#6B7280"
+            sem_label = "N/A"
+            loc_clean = "—"
+
+        zona_name = row['ZONA_DECRETO'] if row['ZONA_DECRETO'] else row['NOMBRE_ZON']
+        popup_html = (
+            f"<div style='font-family:Arial;font-size:13px;min-width:200px'>"
+            f"<b>{zona_name}</b><br>"
+            f"Localidad: {row['LocaNombre']}<br>"
+            f"Barrio: {row['BARRIO']}<br>"
+            f"Área: {row['AREA_Ha']:.2f} Ha<br>"
+            f"Estado: <b>{'✅ Aprobada' if is_approved else '❌ No aprobada'}</b><br>"
+            f"Semáforo ({TIP_MAP.get(sem_tip_map, '')}, {mes_label(last_month) if last_month else '—'}): "
+            f"<b>{sem_label}</b>"
+            f"</div>"
+        )
+
+        folium.GeoJson(
+            row.geometry.__geo_interface__,
+            style_function=lambda feature, fc=fill_color, approved=is_approved: {
+                'fillColor': fc,
+                'color': '#E2E8F0' if approved else '#4B5563',
+                'weight': 2 if approved else 1,
+                'fillOpacity': 0.6 if approved else 0.25,
+            },
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=zona_name,
+        ).add_to(m)
+
+    st_folium(m, width=None, height=550, use_container_width=True)
+
+    if last_month:
+        st.caption(
+            f"Color de zonas aprobadas: semáforo de {TIP_MAP.get(sem_tip_map, '')} "
+            f"({franja_label}) para {mes_label(last_month)}. "
+            f"Verde = normal, amarillo = precaución, rojo = alerta."
+        )
+
+    st.warning(
+        "⚠️ **Nota:** Los datos SIVELCE se reportan a nivel de localidad, no de zona. "
+        "El color refleja el indicador de la **localidad** que contiene la zona."
+    )
+
+    # Summary table
+    n_aprobadas = (gdf['ESTADO'] == 'APROBADA').sum()
+    n_no_aprobadas = (gdf['ESTADO'] == 'NO_APROBADA').sum()
+    area_aprobadas = gdf[gdf['ESTADO'] == 'APROBADA']['AREA_Ha'].sum()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Zonas aprobadas", n_aprobadas)
+    c2.metric("Zonas no aprobadas", n_no_aprobadas)
+    c3.metric("Área total aprobada", f"{area_aprobadas:.1f} Ha")
+
+    st.caption(FOOTER)
+
+
+# ================================================================
+# TAB 3: LOCALIDADES
+# ================================================================
+with tabs[2]:
     st.info(
         "📍 **Explorador por localidad.** Selecciona una localidad para ver su serie "
         "mensual. La línea horizontal gris marca la media pre-decreto. "
@@ -326,6 +470,8 @@ with tabs[1]:
         decreto_vline(fig)
         st.plotly_chart(fig, use_container_width=True)
 
+        st.divider()
+
         # Tabla de indicadores
         rows = []
         for r in sl:
@@ -347,13 +493,13 @@ with tabs[1]:
                 })
         if rows:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.caption(FUENTE)
+        st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 3: SEMÁFORO
+# TAB 4: SEMÁFORO
 # ================================================================
-with tabs[2]:
+with tabs[3]:
     st.info(
         "🚦 **Sistema semáforo mensual.** Cada celda muestra el cambio % respecto "
         "al promedio pre-decreto y el conteo absoluto. Rojo = alerta, "
@@ -384,15 +530,15 @@ with tabs[2]:
             row_colors = []
             row_text = []
             row_hover = []
-            for m in post_meses:
-                entry = next((r for r in sem_data if r["l"] == loc and r["m"] == m), None)
+            for m_val in post_meses:
+                entry = next((r for r in sem_data if r["l"] == loc and r["m"] == m_val), None)
                 if entry:
                     s_code = entry["s"]
                     row_colors.append({"R": 0, "A": 0.5, "V": 1, "G": 0.25}.get(s_code, 0.25))
                     row_text.append(f"{entry['d']:+.0f}%<br>({entry['c']})")
                     estado = {"R": "ROJO", "A": "AMARILLO", "V": "VERDE"}.get(s_code, "GRIS")
                     row_hover.append(
-                        f"<b>{loc}</b> | {mes_label(m)}<br>"
+                        f"<b>{loc}</b> | {mes_label(m_val)}<br>"
                         f"Conteo: {entry['c']}<br>"
                         f"Baseline: {entry['b']}<br>"
                         f"Δ: {entry['d']:+.1f}%<br>"
@@ -420,7 +566,7 @@ with tabs[2]:
             **PLOTLY_LAYOUT,
             title=f"Semáforo — {franja_label} | {TIP_MAP[sem_tip]}",
             xaxis_title="Mes", yaxis_title="",
-            height=450,
+            height=470,
             xaxis=dict(type="category", tickangle=-45),
             yaxis=dict(autorange="reversed"),
         )
@@ -431,13 +577,13 @@ with tabs[2]:
             "🟡 **AMARILLO**: 10%≤Δ<20%  \n"
             "🟢 **VERDE**: Δ<10%"
         )
-        st.caption(FUENTE)
+        st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 4: DiD
+# TAB 5: DiD
 # ================================================================
-with tabs[3]:
+with tabs[4]:
     st.info(
         "📐 **Diferencias en Diferencias (DiD).** Compara el cambio pre→post entre "
         "localidades focalizadas y control. Un DiD positivo indica que focal empeoró "
@@ -454,8 +600,8 @@ with tabs[3]:
         prF, prC = d["prF"], d["prC"]
         poF, poC = d["poF"], d["poC"]
 
-        n_pre_m = len([m for m in MESES if m < CORTE])
-        n_post_m = len([m for m in MESES if m >= CORTE])
+        n_pre_m = len([m_val for m_val in MESES if m_val < CORTE])
+        n_post_m = len([m_val for m_val in MESES if m_val >= CORTE])
 
         avg_prF = prF / n_pre_m if n_pre_m else 0
         avg_poF = poF / n_post_m if n_post_m else 0
@@ -487,10 +633,8 @@ with tabs[3]:
             apoF = d_all.get("apoF", 0)
             aprC = d_all.get("aprC", 0)
             apoC = d_all.get("apoC", 0)
-            prF_t = d_all["prF"]
-            poF_t = d_all["poF"]
-            prC_t = d_all["prC"]
-            poC_t = d_all["poC"]
+            prF_t, poF_t = d_all["prF"], d_all["poF"]
+            prC_t, poC_t = d_all["prC"], d_all["poC"]
 
             pct_aprF = (aprF / prF_t * 100) if prF_t else 0
             pct_apoF = (apoF / poF_t * 100) if poF_t else 0
@@ -519,7 +663,8 @@ with tabs[3]:
             use_container_width=True, hide_index=True,
         )
 
-        # Interpretación con MDE
+        st.divider()
+
         for row in rows_did:
             tid = row["_tid"]
             did_num = row["_did_num"]
@@ -539,13 +684,13 @@ with tabs[3]:
                         f"✅ Supera el MDE. Merece investigación adicional."
                     )
 
-        st.caption(FUENTE)
+        st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 5: ALCOHOL POR HORA
+# TAB 6: ALCOHOL POR HORA
 # ================================================================
-with tabs[4]:
+with tabs[5]:
     st.info(
         "🍺 **Proporción de eventos con alcohol por hora del día**, pre vs post decreto. "
         "Las horas de la franja seleccionada se resaltan en dorado. "
@@ -577,7 +722,6 @@ with tabs[4]:
         customdata=[r["poN"] for r in alc_data],
     ))
 
-    # Resaltar franja seleccionada
     for h in horas_franja:
         label = f"{h:02d}h"
         idx = hora_labels.index(label) if label in hora_labels else -1
@@ -597,16 +741,13 @@ with tabs[4]:
         bargap=0.15,
         bargroupgap=0.05,
         xaxis=dict(
-            type="category",
-            categoryorder="array",
-            categoryarray=hora_labels,
+            type="category", categoryorder="array", categoryarray=hora_labels,
             gridcolor="rgba(255,255,255,0.08)",
         ),
         yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Hallazgo destacado
     alc_franja = [r for r in alc_data if r["h"] in horas_franja]
     if alc_franja:
         n_pre_fr = sum(r["prN"] for r in alc_franja)
@@ -628,13 +769,13 @@ with tabs[4]:
                 f"N pre = {n_pre_fr:,} | N post = {n_post_fr:,}"
             )
 
-    st.caption(FUENTE)
+    st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 6: PODER ESTADÍSTICO
+# TAB 7: PODER ESTADÍSTICO
 # ================================================================
-with tabs[5]:
+with tabs[6]:
     st.info(
         "⚡ **Poder estadístico y MDE.** El Efecto Mínimo Detectable indica el cambio "
         "más pequeño que podemos identificar con 80% de confianza. "
@@ -683,17 +824,18 @@ with tabs[5]:
             use_container_width=True, hide_index=True,
         )
 
-        # Gráfica de barras horizontales
+        st.divider()
+
         plot_rows = [r for r in rows_poder if r["_mde_num"] < 999]
         if plot_rows:
             labels = [f"{r['Tipología']} ({r['Diseño'][:7]})" for r in plot_rows]
             mdes = [r["_mde_num"] for r in plot_rows]
-            colors = [VERDE if m <= 30 else AMARILLO if m <= 50 else ROJO for m in mdes]
+            colors = [VERDE if mv <= 30 else AMARILLO if mv <= 50 else ROJO for mv in mdes]
 
             fig = go.Figure(go.Bar(
                 y=labels, x=mdes, orientation="h",
                 marker_color=colors, opacity=0.85,
-                text=[f"{m:.0f}%" for m in mdes], textposition="outside",
+                text=[f"{mv:.0f}%" for mv in mdes], textposition="outside",
                 hovertemplate="%{y}<br>MDE: %{x:.1f}%<extra></extra>",
             ))
             fig.add_vline(x=30, line_dash="dot", line_color="#94A3B8",
@@ -703,95 +845,191 @@ with tabs[5]:
                 **PLOTLY_LAYOUT,
                 title=f"Efecto Mínimo Detectable — {franja_label}",
                 xaxis_title="MDE (%)", yaxis_title="",
-                height=max(350, len(plot_rows) * 45),
+                height=max(450, len(plot_rows) * 45),
                 yaxis=dict(autorange="reversed"),
                 xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    # Comparación entre franjas
-    st.markdown(f"**Comparación de MDE entre franjas** — {tip_label}")
-    comp_rows = []
-    for fid in FRANJA_IDS:
-        for diseno, dis_label in [("pp", "Pre-post"), ("did", "DiD")]:
-            p = get_poder(fid, tip_sel, diseno)
-            if p and p.get("mde"):
-                comp_rows.append({
-                    "Franja": FRANJA_DISPLAY.get(fid, FRANJA_MAP[fid]),
-                    "Diseño": dis_label,
-                    "MDE (%)": p["mde"],
-                    "N pre": f"{p['nPr']:,}",
-                    "N post": f"{p['nPo']:,}",
-                })
-    if comp_rows:
-        st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+        st.divider()
 
-    st.caption(FUENTE)
+        st.markdown(f"**Comparación de MDE entre franjas** — {tip_label}")
+        comp_rows = []
+        for fid in FRANJA_IDS:
+            for diseno, dis_label in [("pp", "Pre-post"), ("did", "DiD")]:
+                p = get_poder(fid, tip_sel, diseno)
+                if p and p.get("mde"):
+                    comp_rows.append({
+                        "Franja": FRANJA_DISPLAY.get(fid, FRANJA_MAP[fid]),
+                        "Diseño": dis_label,
+                        "MDE (%)": p["mde"],
+                        "N pre": f"{p['nPr']:,}",
+                        "N post": f"{p['nPo']:,}",
+                    })
+        if comp_rows:
+            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+    st.caption(FOOTER)
 
 
 # ================================================================
-# TAB 7: RESUMEN EJECUTIVO
+# TAB 8: METODOLOGÍA
 # ================================================================
-with tabs[6]:
+with tabs[7]:
     st.info(
-        "📋 **Resumen ejecutivo** con los hallazgos principales, limitaciones y "
-        "recomendaciones para la Secretaría."
+        "📖 **Documentación técnica** del diseño, fuentes, variables y limitaciones "
+        "del análisis. Referencia para interpretar correctamente los resultados."
     )
 
-    st.markdown("#### 📋 Resumen Ejecutivo")
+    st.markdown("## 📖 Metodología")
 
+    st.divider()
+
+    # Sección 1
+    st.markdown("### 1. El Decreto")
     st.markdown("""
-**Decreto 293/2025** (compilado en Decreto 644/2025): horarios diferenciados
-de cierre nocturno — 5:00 AM en 19 zonas focalizadas (9 localidades) vs.
-3:00 AM en el resto de Bogotá. Vigente desde julio 2025.
+El **Decreto 293 de 2025** (compilado en el Decreto 644/2025) establece horarios
+diferenciados de cierre nocturno para establecimientos de expendio y consumo
+de bebidas alcohólicas en Bogotá:
 
----
+- **Zonas focalizadas** (19 zonas en 9 localidades): horario extendido hasta las **5:00 AM**
+- **Resto de la ciudad**: cierre a las **3:00 AM**
 
-##### Hallazgos principales
-
-**1. Alcohol en franja crítica (03-04h)**
-La proporción de eventos con presencia de alcohol en la franja 03:00-04:59
-muestra un incremento post-decreto en localidades focalizadas.
-Esto es consistente con mayor actividad nocturna en las zonas con horario
-extendido.
-
-**2. Siniestros viales**
-En varias localidades focalizadas, los siniestros viales en franja nocturna
-muestran incrementos persistentes (semáforo ROJO en múltiples meses).
-Kennedy y Suba requieren atención especial.
-
-**3. Poder estadístico limitado**
-El MDE mínimo obtenido es ~40% (DiD, franja nocturna ampliada, todas las
-tipologías). Solo se pueden detectar efectos muy grandes. La franja
-nocturna 22-05 ofrece mejor poder que la franja estricta 03-04.
-
----
-
-##### Limitaciones críticas
-
-| Limitación | Impacto |
-|-----------|---------|
-| **Sin línea base histórica** | Solo 7 meses pre-decreto (dic 2024 - jun 2025). El protocolo contemplaba datos desde 2022. |
-| **Sin coordenadas de eventos** | SIVELCE no tiene lat/lon. La clasificación es por localidad (9 focal vs. 11+ control), no por zona exacta. |
-| **Sobredispersión** | Varianza/media > 12 en franja crítica. Requiere modelos Binomial Negativo. |
-
----
-
-##### Recomendaciones
-
-1. **Solicitar datos SIVELCE 2022-2024** para construir línea base robusta
-   y reducir el MDE sustancialmente.
-2. **Solicitar coordenadas geocodificadas** (o UPZ) para spatial join con
-   los polígonos de las 19 zonas aprobadas.
-3. **Considerar fuentes complementarias**: CRUE, INMLCF, datos de movilidad.
-4. **Ampliar ventana post-decreto** — cada mes adicional mejora el poder.
-5. **Explorar modelos Binomial Negativo** con efectos fijos de localidad y
-   tendencia temporal.
-
----
+**Vigencia:** julio 2025 (decreto general) | Diciembre 2025 (resolución 19 zonas)
 """)
-    st.caption(
-        "Documento generado a partir de SIVELCE (depurado). "
-        "177,088 eventos | dic 2024 – feb 2026. "
-        "Scripts reproducibles en `_dashboard/`."
-    )
+
+    st.divider()
+
+    # Sección 2
+    st.markdown("### 2. Diseño del estudio")
+    st.markdown("""
+Diseño cuasiexperimental de tipo **Diferencias en Diferencias (DiD)**:
+
+**GRUPO TRATAMIENTO (Focal):** 9 localidades que contienen las 19 zonas focalizadas
+> Kennedy, Suba, Engativá, Chapinero, Bosa, Fontibón, Usaquén,
+> Puente Aranda, Mártires
+
+**GRUPO CONTROL:** 5 localidades sin zonas focalizadas con mayor volumen de eventos
+> Ciudad Bolívar, San Cristóbal, Rafael Uribe Uribe, Barrios Unidos, Tunjuelito
+
+| Período | Rango | Meses |
+|---------|-------|-------|
+| Pre-decreto | diciembre 2024 – junio 2025 | 7 meses |
+| Post-decreto | julio 2025 – febrero 2026 | 8 meses |
+""")
+
+    st.divider()
+
+    # Sección 3
+    st.markdown("### 3. Fuente de datos")
+    st.markdown(f"""
+**SIVELCE**: Sistema de Vigilancia Epidemiológica de Lesiones de Causa Externa
+
+- **{TOTAL:,} eventos** con fecha y hora válidos
+- **Variables clave:** fecha/hora del evento, localidad, tipología derivada,
+  presencia de alcohol
+- **Limitación:** no tiene coordenadas lat/lon, la clasificación es a nivel
+  de localidad (no de zona específica)
+""")
+
+    st.divider()
+
+    # Sección 4
+    st.markdown("### 4. Tipologías")
+    st.markdown("""
+Se construyó una variable de tipología **jerárquica** (un evento solo puede
+pertenecer a una categoría, evaluadas en este orden):
+
+| # | Tipología | Regla de clasificación |
+|---|-----------|----------------------|
+| 1 | Autolesión | `CausadaPor` = "Autoinfligida" |
+| 2 | Violencia sexual | `Maltrato` = "Delito Sexual" |
+| 3 | Violencia intrafamiliar | `Maltrato` = "V. Intrafamiliar" ó "V. Conyugal" |
+| 4 | Violencia interpersonal | `CausadaPor` = "Terceros" + `Maltrato` = "V. Común" |
+| 5 | Siniestros viales | `Accidente` = "Accidente de tránsito" |
+| 6 | Intoxicación | `Alcohol` = "Sí" ó `SPA` = "Sí" (no capturado arriba) |
+| 7 | No intencional otros | Todo lo demás |
+
+La variable **"con alcohol"** es transversal e independiente de la tipología.
+""")
+
+    st.divider()
+
+    # Sección 5
+    st.markdown("### 5. Franjas horarias")
+    st.markdown("""
+Se pre-calcularon **6 ventanas de análisis** para explorar la sensibilidad
+de los resultados:
+
+| Franja | Horas | Justificación |
+|--------|-------|---------------|
+| 🔴 Crítica 03-04 | 3:00-4:59 AM | Ventana donde aplica la diferencia regulatoria |
+| Ampliada 02-04 | 2:00-4:59 AM | +1 hora antes del cierre general |
+| Ampliada 03-05 | 3:00-5:59 AM | Incluye hora post-cierre extendido |
+| Extendida 01-05 | 1:00-5:59 AM | Madrugada amplia |
+| 🔵 Nocturna 22-05 | 10:00 PM-5:59 AM | Nocturna completa (mayor poder estadístico) |
+| Madrugada 00-05 | 12:00-5:59 AM | Medianoche a amanecer |
+
+> **Tradeoff:** Ampliar la franja aumenta el N de eventos y reduce el MDE,
+> pero diluye la especificidad del efecto del decreto.
+""")
+
+    st.divider()
+
+    # Sección 6
+    st.markdown("### 6. Indicadores y sistema semáforo")
+    st.markdown("""
+**IND-1:** Conteo absoluto mensual de eventos en la franja
+
+**IND-5:** Cambio porcentual vs línea base pre-decreto (promedio dic 2024 – jun 2025)
+
+#### Sistema semáforo
+
+| Color | Criterio |
+|-------|----------|
+| 🔴 ROJO | Δ ≥ 20% con p<0.05, **O** Δ ≥ 30%, **O** Δ ≥ 10% por 3+ meses consecutivos |
+| 🟡 AMARILLO | 10% ≤ Δ < 20%, **O** 0.05 ≤ p < 0.10 |
+| 🟢 VERDE | Δ < 10% **y** p ≥ 0.10 |
+
+- **p-valor:** test exacto de Poisson comparando conteo observado vs esperado bajo baseline
+- **IC 95%:** aproximación log-normal del rate ratio
+""")
+
+    st.divider()
+
+    # Sección 7
+    st.markdown("### 7. Poder estadístico y limitaciones")
+    st.markdown("""
+**Efecto Mínimo Detectable (MDE):** el cambio más pequeño que podemos detectar
+con 80% de probabilidad (α = 0.05).
+
+**Fórmula:** `δ_MDE ≈ exp(2.80 × √(1/N_post + 1/N_pre)) - 1`
+
+#### Limitaciones críticas
+
+| # | Limitación | Impacto |
+|---|-----------|---------|
+| 1 | **Sin línea base histórica** | Solo 7 meses pre-decreto (el protocolo requiere datos 2022-2024) |
+| 2 | **Sin coordenadas geográficas** | No es posible vincular eventos a las 19 zonas específicas, solo a las 9 localidades |
+| 3 | **Alta sobredispersión** | Varianza/media ≈ 12.4 en franja crítica |
+| 4 | **MDE elevado** | El más bajo es ~40% (DiD, nocturna, todas) — solo se detectarían efectos muy grandes |
+""")
+
+    st.divider()
+
+    # Sección 8
+    st.markdown("### 8. Cómo leer el dashboard")
+    st.markdown("""
+| Pestaña | Qué muestra | Cómo interpretar |
+|---------|-------------|-----------------|
+| 📊 **General** | Evolución mensual de eventos | Si hay efecto, la línea verde (focal) debería separarse de la gris (control) después de jul-25 |
+| 🗺️ **Mapa** | Ubicación geográfica de las 19 zonas | Los colores reflejan el semáforo de la localidad contenedora |
+| 📍 **Localidades** | Serie individual de cada localidad | Comparar con la media pre-decreto (línea gris horizontal) |
+| 🚦 **Semáforo** | Alerta rápida por localidad y mes | Rojo = alerta, amarillo = precaución, verde = normal |
+| 📐 **DiD** | Comparación formal entre grupos | DiD positivo = focal empeoró más que control |
+| 🍺 **Alcohol** | % eventos con alcohol por hora | Las horas resaltadas en dorado son la franja seleccionada |
+| ⚡ **Poder** | MDE por diseño y tipología | Verde (<30%) = bueno, rojo (>50%) = limitado |
+""")
+
+    st.divider()
+    st.caption(FOOTER)
