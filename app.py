@@ -783,12 +783,20 @@ with tabs[6]:
         "más pequeño que podemos identificar con 80% de confianza. "
         "Verde (<30%) = bueno, rojo (>50%) = solo detecta cambios muy grandes."
     )
+    st.warning(
+        "**Nota metodológica:** El MDE pre-post usa el N total de eventos y mide el poder "
+        "para detectar un cambio global. El MDE DiD es una aproximación conservadora que "
+        "refleja el poder para detectar diferencias entre grupos focal y control, usando "
+        "N efectivo basado en la media por celda localidad×mes × min(clusters) × meses. "
+        "Un cálculo preciso de poder para DiD requiere simulación Monte Carlo con la "
+        "estructura de varianza observada. Los valores reportados son orientativos."
+    )
 
     st.markdown(f"#### ⚡ Poder Estadístico — {franja_label}")
 
     rows_poder = []
     for tid in TIP_IDS:
-        for diseno, dis_label in [("pp", "Pre-post agregado"), ("did", "DiD localidad×mes")]:
+        for diseno, dis_label in [("pp", "Pre-post agregado"), ("did", "DiD (aprox. conservador)")]:
             p = get_poder(franja_sel, tid, diseno)
             if not p:
                 continue
