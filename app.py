@@ -7,9 +7,13 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import json
-import geopandas as gpd
-import folium
-from streamlit_folium import st_folium
+try:
+    import geopandas as gpd
+    import folium
+    from streamlit_folium import st_folium
+    HAS_GEO = True
+except ImportError:
+    HAS_GEO = False
 
 # ── Configuración ──────────────────────────────────────────────
 st.set_page_config(
@@ -64,6 +68,8 @@ def load_data():
 
 @st.cache_data
 def load_shapefile():
+    if not HAS_GEO:
+        return None
     gdf = gpd.read_file("shapes/ZonaDecretoRumba.shp")
     manual_match = {
         'BOSA CENTRO': 'APROBADA', 'BOYACA SANTA MARIA': 'APROBADA',
@@ -326,95 +332,108 @@ with tabs[1]:
 
     st.markdown(f"#### 🗺️ 19 Zonas Focalizadas del Decreto 293/2025")
 
-    gdf = load_shapefile()
+    _map_ok = True
+    if not HAS_GEO:
+        st.error("Las dependencias geográficas (geopandas, folium) no están disponibles. "
+                 "Verifica que requirements.txt incluya geopandas, folium y streamlit-folium.")
+        _map_ok = False
+    else:
+        try:
+            gdf = load_shapefile()
+            if gdf is None:
+                raise ImportError("geopandas no disponible")
+        except Exception as e:
+            st.error(f"No se pudo cargar el shapefile: {e}")
+            _map_ok = False
 
-    # Get semáforo for last month to color approved zones
-    sem_tip_map = "T1"  # Default to siniestros viales
-    sem_data = get_sem(franja_sel, sem_tip_map)
-    post_meses_all = sorted(set(r["m"] for r in sem_data)) if sem_data else []
-    last_month = post_meses_all[-1] if post_meses_all else None
+    if _map_ok:
+        # Get semáforo for last month to color approved zones
+        sem_tip_map = "T1"  # Default to siniestros viales
+        sem_data = get_sem(franja_sel, sem_tip_map)
+        post_meses_all = sorted(set(r["m"] for r in sem_data)) if sem_data else []
+        last_month = post_meses_all[-1] if post_meses_all else None
 
-    loc_semaforo = {}
-    if last_month:
-        for entry in sem_data:
-            if entry["m"] == last_month:
-                loc_semaforo[entry["l"]] = entry["s"]
+        loc_semaforo = {}
+        if last_month:
+            for entry in sem_data:
+                if entry["m"] == last_month:
+                    loc_semaforo[entry["l"]] = entry["s"]
 
-    color_sem = {"R": "#DC2626", "A": "#D97706", "V": "#16A34A"}
+        color_sem = {"R": "#DC2626", "A": "#D97706", "V": "#16A34A"}
 
-    # Build folium map
-    m = folium.Map(
-        location=[4.65, -74.1], zoom_start=11,
-        tiles="CartoDB dark_matter",
-    )
+        # Build folium map
+        fmap = folium.Map(
+            location=[4.65, -74.1], zoom_start=11,
+            tiles="CartoDB dark_matter",
+        )
 
-    for _, row in gdf.iterrows():
-        is_approved = row['ESTADO'] == 'APROBADA'
+        for _, row in gdf.iterrows():
+            is_approved = row['ESTADO'] == 'APROBADA'
 
-        if is_approved:
-            loc_raw = str(row['LocaNombre']).strip().upper()
-            loc_clean = ZONA_LOC_MAP.get(loc_raw, None)
-            sem_code = loc_semaforo.get(loc_clean, None) if loc_clean else None
+            if is_approved:
+                loc_raw = str(row['LocaNombre']).strip().upper()
+                loc_clean = ZONA_LOC_MAP.get(loc_raw, None)
+                sem_code = loc_semaforo.get(loc_clean, None) if loc_clean else None
 
-            if sem_code and sem_code in color_sem:
-                fill_color = color_sem[sem_code]
-                sem_label = {"R": "ROJO", "A": "AMARILLO", "V": "VERDE"}.get(sem_code, "—")
+                if sem_code and sem_code in color_sem:
+                    fill_color = color_sem[sem_code]
+                    sem_label = {"R": "ROJO", "A": "AMARILLO", "V": "VERDE"}.get(sem_code, "—")
+                else:
+                    fill_color = VERDE
+                    sem_label = "—"
             else:
-                fill_color = VERDE
-                sem_label = "—"
-        else:
-            fill_color = "#6B7280"
-            sem_label = "N/A"
-            loc_clean = "—"
+                fill_color = "#6B7280"
+                sem_label = "N/A"
+                loc_clean = "—"
 
-        zona_name = row['ZONA_DECRETO'] if row['ZONA_DECRETO'] else row['NOMBRE_ZON']
-        popup_html = (
-            f"<div style='font-family:Arial;font-size:13px;min-width:200px'>"
-            f"<b>{zona_name}</b><br>"
-            f"Localidad: {row['LocaNombre']}<br>"
-            f"Barrio: {row['BARRIO']}<br>"
-            f"Área: {row['AREA_Ha']:.2f} Ha<br>"
-            f"Estado: <b>{'✅ Aprobada' if is_approved else '❌ No aprobada'}</b><br>"
-            f"Semáforo ({TIP_MAP.get(sem_tip_map, '')}, {mes_label(last_month) if last_month else '—'}): "
-            f"<b>{sem_label}</b>"
-            f"</div>"
+            zona_name = row['ZONA_DECRETO'] if row['ZONA_DECRETO'] else row['NOMBRE_ZON']
+            popup_html = (
+                f"<div style='font-family:Arial;font-size:13px;min-width:200px'>"
+                f"<b>{zona_name}</b><br>"
+                f"Localidad: {row['LocaNombre']}<br>"
+                f"Barrio: {row['BARRIO']}<br>"
+                f"Área: {row['AREA_Ha']:.2f} Ha<br>"
+                f"Estado: <b>{'✅ Aprobada' if is_approved else '❌ No aprobada'}</b><br>"
+                f"Semáforo ({TIP_MAP.get(sem_tip_map, '')}, {mes_label(last_month) if last_month else '—'}): "
+                f"<b>{sem_label}</b>"
+                f"</div>"
+            )
+
+            folium.GeoJson(
+                row.geometry.__geo_interface__,
+                style_function=lambda feature, fc=fill_color, approved=is_approved: {
+                    'fillColor': fc,
+                    'color': '#E2E8F0' if approved else '#4B5563',
+                    'weight': 2 if approved else 1,
+                    'fillOpacity': 0.6 if approved else 0.25,
+                },
+                popup=folium.Popup(popup_html, max_width=300),
+                tooltip=zona_name,
+            ).add_to(fmap)
+
+        st_folium(fmap, width=None, height=550, use_container_width=True)
+
+        if last_month:
+            st.caption(
+                f"Color de zonas aprobadas: semáforo de {TIP_MAP.get(sem_tip_map, '')} "
+                f"({franja_label}) para {mes_label(last_month)}. "
+                f"Verde = normal, amarillo = precaución, rojo = alerta."
+            )
+
+        st.warning(
+            "⚠️ **Nota:** Los datos SIVELCE se reportan a nivel de localidad, no de zona. "
+            "El color refleja el indicador de la **localidad** que contiene la zona."
         )
 
-        folium.GeoJson(
-            row.geometry.__geo_interface__,
-            style_function=lambda feature, fc=fill_color, approved=is_approved: {
-                'fillColor': fc,
-                'color': '#E2E8F0' if approved else '#4B5563',
-                'weight': 2 if approved else 1,
-                'fillOpacity': 0.6 if approved else 0.25,
-            },
-            popup=folium.Popup(popup_html, max_width=300),
-            tooltip=zona_name,
-        ).add_to(m)
+        # Summary table
+        n_aprobadas = (gdf['ESTADO'] == 'APROBADA').sum()
+        n_no_aprobadas = (gdf['ESTADO'] == 'NO_APROBADA').sum()
+        area_aprobadas = gdf[gdf['ESTADO'] == 'APROBADA']['AREA_Ha'].sum()
 
-    st_folium(m, width=None, height=550, use_container_width=True)
-
-    if last_month:
-        st.caption(
-            f"Color de zonas aprobadas: semáforo de {TIP_MAP.get(sem_tip_map, '')} "
-            f"({franja_label}) para {mes_label(last_month)}. "
-            f"Verde = normal, amarillo = precaución, rojo = alerta."
-        )
-
-    st.warning(
-        "⚠️ **Nota:** Los datos SIVELCE se reportan a nivel de localidad, no de zona. "
-        "El color refleja el indicador de la **localidad** que contiene la zona."
-    )
-
-    # Summary table
-    n_aprobadas = (gdf['ESTADO'] == 'APROBADA').sum()
-    n_no_aprobadas = (gdf['ESTADO'] == 'NO_APROBADA').sum()
-    area_aprobadas = gdf[gdf['ESTADO'] == 'APROBADA']['AREA_Ha'].sum()
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Zonas aprobadas", n_aprobadas)
-    c2.metric("Zonas no aprobadas", n_no_aprobadas)
-    c3.metric("Área total aprobada", f"{area_aprobadas:.1f} Ha")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Zonas aprobadas", n_aprobadas)
+        c2.metric("Zonas no aprobadas", n_no_aprobadas)
+        c3.metric("Área total aprobada", f"{area_aprobadas:.1f} Ha")
 
     st.caption(FOOTER)
 
